@@ -1,18 +1,15 @@
+from k8s_rl_gym.config import load_environment_config
 from k8s_rl_gym.env import KubernetesDeploymentEnv
 
 
 def main() -> None:
-    env = KubernetesDeploymentEnv(
-        deployment_name="nginx-demo",
-        namespace="default",
-        min_replicas=1,
-        max_replicas=3,
-        max_steps=5,
-        stabilization_seconds=5.0,
-    )
+    config = load_environment_config("configs/env.local.yaml")
+    env = KubernetesDeploymentEnv(config)
 
     observation, info = env.reset()
 
+    print("Observation space:", env.observation_space)
+    print("Action space:", env.action_space)
     print("Initial observation:", observation)
     print("Initial info:", info)
 

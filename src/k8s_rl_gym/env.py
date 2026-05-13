@@ -6,39 +6,33 @@ import numpy as np
 from gymnasium import spaces
 
 from k8s_rl_gym.k8s_client import DeploymentStatus, KubernetesDeploymentClient
+from k8s_rl_gym.config import EnvironmentConfig
 
 
 class KubernetesDeploymentEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(
-        self,
-        deployment_name: str = "nginx-demo",
-        namespace: str = "default",
-        min_replicas: int = 1,
-        max_replicas: int = 3,
-        max_steps: int = 10,
-        stabilization_seconds: float = 5.0,
-    ) -> None:
+    def __init__(self, config: EnvironmentConfig) -> None:
         super().__init__()
 
-        self.deployment_name = deployment_name
-        self.namespace = namespace
-        self.min_replicas = min_replicas
-        self.max_replicas = max_replicas
-        self.max_steps = max_steps
-        self.stabilization_seconds = stabilization_seconds
+        self.config = config
+        self.deployment_name = config.deployments[0] # TODO: support multiple deployments in the future
+        self.namespace = config.namespace
+        self.min_replicas = config.min_replicas
+        self.max_replicas = config.max_replicas
+        self.max_steps = config.max_steps
+        self.stabilization_seconds = config.step_wait_seconds
 
         self.k8s = KubernetesDeploymentClient()
         self.current_step = 0
 
-        replica_options = max_replicas - min_replicas + 1
+        replica_options = self.max_replicas - self.min_replicas + 1
         self.action_space = spaces.Discrete(replica_options)
 
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(3,),
+            shape=(len(config.metrics),),
             dtype=np.float32,
         )
 
@@ -104,14 +98,21 @@ class KubernetesDeploymentEnv(gym.Env):
         return self.min_replicas + int(action)
 
     def _status_to_observation(self, status: DeploymentStatus) -> np.ndarray:
-        return np.array(
-            [
-                status.desired_replicas / self.max_replicas,
-                status.ready_replicas / self.max_replicas,
-                status.available_replicas / self.max_replicas,
-            ],
-            dtype=np.float32,
-        )
+        values = []
+
+        for metric in self.config.metrics:
+            if metric == "desired_replicas":
+                values.append(status.desired_replicas / self.max_replicas)
+            elif metric == "ready_replicas":
+                values.append(status.ready_replicas / self.max_replicas)
+            elif metric == "available_replicas":
+                values.append(status.available_replicas / self.max_replicas)
+            elif metric == "unavailable_replicas":
+                values.append(status.unavailable_replicas / self.max_replicas)
+            else:
+                raise ValueError(f"Unsupported metric: {metric}")
+
+        return np.array(values, dtype=np.float32)
 
     def _calculate_reward(self, status: DeploymentStatus) -> float:
         ready_score = 1.0 if status.ready_replicas == status.desired_replicas else -1.0
