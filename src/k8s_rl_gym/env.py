@@ -7,6 +7,7 @@ from gymnasium import spaces
 
 from k8s_rl_gym.k8s_client import DeploymentStatus, KubernetesDeploymentClient
 from k8s_rl_gym.config import EnvironmentConfig
+from k8s_rl_gym.rewards import get_reward_function
 
 
 class KubernetesDeploymentEnv(gym.Env):
@@ -21,6 +22,8 @@ class KubernetesDeploymentEnv(gym.Env):
         self.max_replicas = config.max_replicas
         self.max_steps = config.max_steps
         self.stabilization_seconds = config.step_wait_seconds
+        
+        self.reward_function = get_reward_function(config.reward)
 
         self.k8s = KubernetesDeploymentClient()
         self.current_step = 0
@@ -138,16 +141,9 @@ class KubernetesDeploymentEnv(gym.Env):
             return status.unavailable_replicas
 
         raise ValueError(f"Unsupported metric: {metric}")
+    
     def _calculate_reward(self, statuses: list[DeploymentStatus]) -> float:
-        # TODO use rewards of rewards.py
-        rewards = []
-
-        for status in statuses:
-            ready_score = 1.0 if status.ready_replicas == status.desired_replicas else -1.0
-            replica_penalty = 0.1 * status.desired_replicas
-            rewards.append(ready_score - replica_penalty)
-
-        return float(np.mean(rewards))
+        return self.reward_function(statuses, self.max_replicas)
 
     def _statuses_to_info(self, statuses: list[DeploymentStatus]) -> dict[str, Any]:
         deployments = {}
