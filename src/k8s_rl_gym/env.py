@@ -16,7 +16,6 @@ class KubernetesDeploymentEnv(gym.Env):
         super().__init__()
 
         self.config = config
-        self.deployment_name = config.deployments[0] # TODO: support multiple deployments in the future
         self.namespace = config.namespace
         self.min_replicas = config.min_replicas
         self.max_replicas = config.max_replicas
@@ -27,7 +26,9 @@ class KubernetesDeploymentEnv(gym.Env):
         self.current_step = 0
 
         replica_options = self.max_replicas - self.min_replicas + 1
-        self.action_space = spaces.Discrete(replica_options)
+        self.action_space = spaces.MultiDiscrete(
+            [replica_options] * len(self.config.deployments)
+        )
 
         self.observation_space = spaces.Box(
             low=0.0,
@@ -45,20 +46,25 @@ class KubernetesDeploymentEnv(gym.Env):
         super().reset(seed=seed)
 
         self.current_step = 0
+        statuses = []
 
-        self.k8s.scale_deployment(
-            name=self.deployment_name,
-            namespace=self.namespace,
-            replicas=self.min_replicas,
-        )
-        status = self.k8s.wait_until_ready(
-            name=self.deployment_name,
-            namespace=self.namespace,
-            timeout_seconds=120,
-        )
+        for deployment_name in self.config.deployments:
+            self.k8s.scale_deployment(
+                name=deployment_name,
+                namespace=self.namespace,
+                replicas=self.min_replicas,
+            )
 
-        observation = self._status_to_observation(status)
-        info = self._status_to_info(status)
+        for deployment_name in self.config.deployments:
+            status = self.k8s.wait_until_ready(
+                name=deployment_name,
+                namespace=self.namespace,
+                timeout_seconds=120,
+            )
+            statuses.append(status)
+
+        observation = self._statuses_to_observation(statuses)
+        info = self._statuses_to_info(statuses)
 
         return observation, info
 
@@ -70,62 +76,99 @@ class KubernetesDeploymentEnv(gym.Env):
 
         target_replicas = self._action_to_replicas(action)
 
-        self.k8s.scale_deployment(
-            name=self.deployment_name,
-            namespace=self.namespace,
-            replicas=target_replicas,
-        )
+        for deployment_name, replicas in zip(self.config.deployments, target_replicas):
+            self.k8s.scale_deployment(
+                name=deployment_name,
+                namespace=self.namespace,
+                replicas=replicas,
+            )
 
         sleep(self.stabilization_seconds)
 
-        status = self.k8s.get_deployment_status(
-            name=self.deployment_name,
-            namespace=self.namespace,
-        )
+        statuses = []
+        for deployment_name in self.config.deployments:
+            status = self.k8s.get_deployment_status(
+                name=deployment_name,
+                namespace=self.namespace,
+            )
+            statuses.append(status)
 
-        observation = self._status_to_observation(status)
-        reward = self._calculate_reward(status)
+        observation = self._statuses_to_observation(statuses)
+        reward = self._calculate_reward(statuses)
         terminated = False
         truncated = self.current_step >= self.max_steps
 
-        info = self._status_to_info(status)
-        info["action"] = int(action)
-        info["target_replicas"] = target_replicas
+        action_values = np.asarray(action, dtype=int).tolist()
+
+        info = self._statuses_to_info(statuses)
+        info["scaling"] = {
+            deployment_name: {
+                "action": action_value,
+                "target_replicas": replicas,
+            }
+            for deployment_name, action_value, replicas in zip(
+                self.config.deployments,
+                action_values,
+                target_replicas,
+            )
+        }
 
         return observation, reward, terminated, truncated, info
 
-    def _action_to_replicas(self, action: int) -> int:
-        return self.min_replicas + int(action)
+    def _action_to_replicas(self, action) -> list[int]:
+        return [self.min_replicas + int(value) for value in action]
 
-    def _status_to_observation(self, status: DeploymentStatus) -> np.ndarray:
+    def _statuses_to_observation(self, statuses: list[DeploymentStatus]) -> np.ndarray:
         values = []
 
-        for metric in self.config.metrics:
-            if metric == "desired_replicas":
-                values.append(status.desired_replicas / self.max_replicas)
-            elif metric == "ready_replicas":
-                values.append(status.ready_replicas / self.max_replicas)
-            elif metric == "available_replicas":
-                values.append(status.available_replicas / self.max_replicas)
-            elif metric == "unavailable_replicas":
-                values.append(status.unavailable_replicas / self.max_replicas)
-            else:
-                raise ValueError(f"Unsupported metric: {metric}")
+        for status in statuses:
+            for metric in self.config.metrics:
+                values.append(self._metric_value(status, metric) / self.max_replicas)
 
         return np.array(values, dtype=np.float32)
 
-    def _calculate_reward(self, status: DeploymentStatus) -> float:
-        ready_score = 1.0 if status.ready_replicas == status.desired_replicas else -1.0
-        replica_penalty = 0.1 * status.desired_replicas
-        return ready_score - replica_penalty
+    def _metric_value(self, status: DeploymentStatus, metric: str) -> int:
+        if metric == "desired_replicas":
+            return status.desired_replicas
+        if metric == "ready_replicas":
+            return status.ready_replicas
+        if metric == "available_replicas":
+            return status.available_replicas
+        if metric == "unavailable_replicas":
+            return status.unavailable_replicas
 
-    def _status_to_info(self, status: DeploymentStatus) -> dict[str, Any]:
+        raise ValueError(f"Unsupported metric: {metric}")
+    def _calculate_reward(self, statuses: list[DeploymentStatus]) -> float:
+        # TODO use rewards of rewards.py
+        rewards = []
+
+        for status in statuses:
+            ready_score = 1.0 if status.ready_replicas == status.desired_replicas else -1.0
+            replica_penalty = 0.1 * status.desired_replicas
+            rewards.append(ready_score - replica_penalty)
+
+        return float(np.mean(rewards))
+
+    def _statuses_to_info(self, statuses: list[DeploymentStatus]) -> dict[str, Any]:
+        deployments = {}
+
+        for status in statuses:
+            deployments[status.name] = {
+                "namespace": status.namespace,
+                "desired_replicas": status.desired_replicas,
+                "ready_replicas": status.ready_replicas,
+                "available_replicas": status.available_replicas,
+                "unavailable_replicas": status.unavailable_replicas,
+                "observed_metrics": {
+                    metric: {
+                        "raw": self._metric_value(status, metric),
+                        "normalized": self._metric_value(status, metric) / self.max_replicas,
+                    }
+                    for metric in self.config.metrics
+                },
+            }
+
         return {
-            "deployment": status.name,
-            "namespace": status.namespace,
-            "desired_replicas": status.desired_replicas,
-            "ready_replicas": status.ready_replicas,
-            "available_replicas": status.available_replicas,
-            "unavailable_replicas": status.unavailable_replicas,
             "step": self.current_step,
+            "deployments": deployments,
         }

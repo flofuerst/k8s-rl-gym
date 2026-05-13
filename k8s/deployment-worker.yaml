@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-worker
+  labels:
+    app: nginx-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-worker
+  template:
+    metadata:
+      labels:
+        app: nginx-worker
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
