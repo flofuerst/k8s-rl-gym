@@ -139,6 +139,8 @@ class KubernetesDeploymentEnv(gym.Env):
             return status.available_replicas
         if metric == "unavailable_replicas":
             return status.unavailable_replicas
+        if metric == "pod_count":
+            return status.pod_count
 
         raise ValueError(f"Unsupported metric: {metric}")
     
