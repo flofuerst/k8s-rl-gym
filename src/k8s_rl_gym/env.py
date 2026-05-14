@@ -142,14 +142,15 @@ class KubernetesDeploymentEnv(gym.Env):
             return status.unavailable_replicas
         if metric == "pod_count":
             return status.pod_count
-        if metric == "cpu_usage_millicores":
-            if status.cpu_usage_millicores is None:
-                raise ValueError("cpu_usage_millicores requires metrics-server")
-            return status.cpu_usage_millicores
-        if metric == "memory_usage_mib":
-            if status.memory_usage_mib is None:
-                raise ValueError("memory_usage_mib requires metrics-server")
-            return status.memory_usage_mib
+        if metric == "cpu_usage_millicores_per_pod":
+            if status.cpu_usage_millicores_per_pod is None:
+                raise ValueError("cpu_usage_millicores_per_pod requires metrics-server")
+            return status.cpu_usage_millicores_per_pod
+
+        if metric == "memory_usage_mib_per_pod":
+            if status.memory_usage_mib_per_pod is None:
+                raise ValueError("memory_usage_mib_per_pod requires metrics-server")
+            return status.memory_usage_mib_per_pod
 
         raise ValueError(f"Unsupported metric: {metric}")
     
@@ -163,10 +164,10 @@ class KubernetesDeploymentEnv(gym.Env):
         }:
             return value / self.max_replicas
 
-        if metric == "cpu_usage_millicores":
+        if metric == "cpu_usage_millicores_per_pod":
             return min(value / 1000.0, 1.0)
 
-        if metric == "memory_usage_mib":
+        if metric == "memory_usage_mib_per_pod":
             return min(value / 512.0, 1.0)
 
         raise ValueError(f"Unsupported metric: {metric}")

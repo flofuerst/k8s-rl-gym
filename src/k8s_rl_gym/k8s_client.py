@@ -14,8 +14,9 @@ class DeploymentStatus:
     available_replicas: int
     unavailable_replicas: int
     pod_count: int
-    cpu_usage_millicores: int | None
-    memory_usage_mib: int | None
+    cpu_usage_millicores_per_pod: float | None = None
+    memory_usage_mib_per_pod: float | None = None
+
 
 
 class KubernetesDeploymentClient:
@@ -37,7 +38,8 @@ class KubernetesDeploymentClient:
         available = deployment.status.available_replicas or 0
         unavailable = deployment.status.unavailable_replicas or 0
         pod_count = self.count_deployment_pods(name=name, namespace=namespace)
-        cpu_usage_millicores, memory_usage_mib = self.get_deployment_resource_usage(name=name,namespace=namespace,)
+        cpu_usage_millicores_per_pod, memory_usage_mib_per_pod = (self.get_deployment_resource_usage_per_pod(name=name,namespace=namespace,)
+)
 
         return DeploymentStatus(
             name=name,
@@ -47,11 +49,11 @@ class KubernetesDeploymentClient:
             available_replicas=available,
             unavailable_replicas=unavailable,
             pod_count=pod_count,
-            cpu_usage_millicores=cpu_usage_millicores,
-            memory_usage_mib=memory_usage_mib,
+            cpu_usage_millicores_per_pod=cpu_usage_millicores_per_pod,
+            memory_usage_mib_per_pod=memory_usage_mib_per_pod,
         )
     
-    def get_deployment_resource_usage(self, name: str, namespace: str = "default",) -> tuple[int | None, int | None]:
+    def get_deployment_resource_usage_per_pod(self, name: str, namespace: str = "default",) -> tuple[float | None, float | None]:
         deployment = self.apps_api.read_namespaced_deployment(
             name=name,
             namespace=namespace,
@@ -82,17 +84,28 @@ class KubernetesDeploymentClient:
 
         total_cpu = 0
         total_memory = 0
+        measured_pods = 0
 
         for item in metrics.get("items", []):
             if item["metadata"]["name"] not in pod_names:
                 continue
 
+            pod_cpu = 0
+            pod_memory = 0
+
             for container in item.get("containers", []):
                 usage = container.get("usage", {})
-                total_cpu += parse_cpu_to_millicores(usage.get("cpu", "0"))
-                total_memory += parse_memory_to_mib(usage.get("memory", "0"))
+                pod_cpu += parse_cpu_to_millicores(usage.get("cpu", "0"))
+                pod_memory += parse_memory_to_mib(usage.get("memory", "0"))
 
-        return total_cpu, total_memory
+            total_cpu += pod_cpu
+            total_memory += pod_memory
+            measured_pods += 1
+
+        if measured_pods == 0:
+            return None, None
+
+        return total_cpu / measured_pods, total_memory / measured_pods
 
 
     def scale_deployment(self, name: str, replicas: int, namespace: str = "default") -> None:
