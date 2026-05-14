@@ -36,7 +36,7 @@ class KubernetesDeploymentEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0.0,
             high=1.0,
-            shape=(len(config.metrics),),
+            shape=(len(config.metrics) * len(config.deployments),),
             dtype=np.float32,
         )
 
