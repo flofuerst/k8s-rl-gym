@@ -126,7 +126,8 @@ class KubernetesDeploymentEnv(gym.Env):
 
         for status in statuses:
             for metric in self.config.metrics:
-                values.append(self._metric_value(status, metric) / self.max_replicas)
+                value = self._metric_value(status, metric)
+                values.append(self._normalize_metric(metric, value))
 
         return np.array(values, dtype=np.float32)
 
@@ -141,9 +142,35 @@ class KubernetesDeploymentEnv(gym.Env):
             return status.unavailable_replicas
         if metric == "pod_count":
             return status.pod_count
+        if metric == "cpu_usage_millicores":
+            if status.cpu_usage_millicores is None:
+                raise ValueError("cpu_usage_millicores requires metrics-server")
+            return status.cpu_usage_millicores
+        if metric == "memory_usage_mib":
+            if status.memory_usage_mib is None:
+                raise ValueError("memory_usage_mib requires metrics-server")
+            return status.memory_usage_mib
 
         raise ValueError(f"Unsupported metric: {metric}")
     
+    def _normalize_metric(self, metric: str, value: int) -> float:
+        if metric in {
+            "desired_replicas",
+            "ready_replicas",
+            "available_replicas",
+            "unavailable_replicas",
+            "pod_count",
+        }:
+            return value / self.max_replicas
+
+        if metric == "cpu_usage_millicores":
+            return min(value / 1000.0, 1.0)
+
+        if metric == "memory_usage_mib":
+            return min(value / 512.0, 1.0)
+
+        raise ValueError(f"Unsupported metric: {metric}")
+
     def _calculate_reward(self, statuses: list[DeploymentStatus]) -> float:
         return self.reward_function(statuses, self.max_replicas)
 
@@ -160,7 +187,7 @@ class KubernetesDeploymentEnv(gym.Env):
                 "observed_metrics": {
                     metric: {
                         "raw": self._metric_value(status, metric),
-                        "normalized": self._metric_value(status, metric) / self.max_replicas,
+                        "normalized": self._normalize_metric(metric, self._metric_value(status, metric)),
                     }
                     for metric in self.config.metrics
                 },
